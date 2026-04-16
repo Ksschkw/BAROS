@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes, viewport-fit=cover">
-  <title>BAROS · trust delivered neighbor to neighbor</title>
+  <title>BAROS · verifiable trust for local work</title>
   <!-- Font Awesome for icons (free) -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
   <style>
@@ -22,7 +22,6 @@
       -webkit-font-smoothing: antialiased;
     }
 
-    /* strict grayscale */
     .container {
       max-width: 640px;
       margin: 0 auto;
@@ -39,9 +38,9 @@
     }
 
     h1 {
-      font-size: 3rem;
-      line-height: 1.1;
-      margin-bottom: 1rem;
+      font-size: 2.8rem;
+      line-height: 1.15;
+      margin-bottom: 1.5rem;
       font-weight: 600;
     }
 
@@ -138,12 +137,6 @@
       margin-bottom: 0.3rem;
     }
 
-    .divider {
-      height: 1px;
-      background: #ccc;
-      margin: 2rem 0;
-    }
-
     .button {
       display: inline-block;
       background: #111;
@@ -199,64 +192,86 @@
       margin-right: 6px;
     }
 
-    .testimonial {
-      border-left: 3px solid #111;
-      padding-left: 1.2rem;
-      font-style: normal;
-      margin: 1.8rem 0;
-    }
-
-    .quote {
-      font-size: 1.2rem;
-      font-weight: 450;
-    }
-
-    .attribution {
-      margin-top: 0.5rem;
-      color: #4a4a4a;
-    }
-
     hr {
       border: none;
       border-top: 1px solid #ddd;
     }
 
-    /* mobile fine-tuning */
     @media (max-width: 400px) {
       .container {
         padding: 1rem 1.2rem;
       }
       h1 {
-        font-size: 2.5rem;
+        font-size: 2.3rem;
       }
     }
 
-    /* no emojis, only font awesome */
     i {
       margin-right: 6px;
+    }
+
+    /* hero detail styling */
+    .hero-detail {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      margin: 1.5rem 0 0.5rem;
+    }
+    .hero-detail-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.75rem;
+    }
+    .hero-detail-item i {
+      width: 1.5rem;
+      font-size: 1.2rem;
+      margin-top: 0.2rem;
+      color: #111;
     }
   </style>
 </head>
 <body>
   <div class="container">
-    
+
     <!-- Header / Logo -->
     <div class="logo">
       <i class="fas fa-handshake"></i> BAROS
     </div>
 
-    <!-- Hero -->
+    <!-- Hero — complete product explanation, no fluff -->
     <section>
-      <h1>Trust, delivered neighbor&nbsp;to&nbsp;neighbor.</h1>
-      <p style="font-size: 1.3rem; font-weight: 400; color: #1e1e1e;">Your name carries weight again — no credit score needed.</p>
-      <div class="button-group">
-        <a href="#" class="button">Join waitlist <i class="fas fa-arrow-right"></i></a>
-        <a href="#" class="button button-outline">Try pilot</a>
+      <h1>Verifiable trust for local work.</h1>
+      <p style="font-size: 1.2rem; font-weight: 400; color: #1e1e1e; margin-bottom: 1.8rem;">
+        A neighborhood marketplace where reputation is real and payments are guaranteed — without anyone needing to understand blockchain.
+      </p>
+
+      <div class="hero-detail">
+        <div class="hero-detail-item">
+          <i class="fas fa-users"></i>
+          <span><strong>Social vouching</strong> — Neighbors vouch for each other. Each vouch is a compressed NFT on Solana, creating portable, tamper‑proof reputation.</span>
+        </div>
+        <div class="hero-detail-item">
+          <i class="fas fa-id-card"></i>
+          <span><strong>Privacy‑preserving identity</strong> — Verify you're a real person with zero‑knowledge proofs. No ID data is ever exposed to the platform.</span>
+        </div>
+        <div class="hero-detail-item">
+          <i class="fas fa-lock"></i>
+          <span><strong>Smart contract escrow</strong> — Payment is held in a Solana program. Funds release only when the client confirms the job is done. Instant settlement.</span>
+        </div>
+        <div class="hero-detail-item">
+          <i class="fas fa-eye-slash"></i>
+          <span><strong>Invisible blockchain</strong> — Users pay with mobile money or card. Under the hood, everything settles in seconds on Solana for less than a cent.</span>
+        </div>
+        <div class="hero-detail-item">
+          <i class="fas fa-arrows-left-right"></i>
+          <span><strong>Everyone is both client and provider</strong> — Post a job, offer a service, apply for work, or hire someone. One account does it all.</span>
+        </div>
       </div>
-      <div class="testimonial" style="margin-top: 2.2rem;">
-        <div class="quote">“My grandmother doesn't need a credit score. She needs to know if the man fixing her roof is the son of someone she trusts.”</div>
-        <div class="attribution">— BAROS manifesto</div>
-      </div>
+
+      <!-- No waitlist / pilot buttons. Just honesty. -->
+      <p class="text-muted" style="margin-top: 2.5rem; border-left: 2px solid #aaa; padding-left: 1rem;">
+        BAROS is a Solana hackathon project. It demonstrates how local trust can be rebuilt with on‑chain reputation and escrow — no crypto UX required.
+      </p>
     </section>
 
     <!-- Problem -->
@@ -308,7 +323,7 @@
     <section>
       <h2>Everyone plays both sides</h2>
       <p>You can offer a service, request a service, post a job, or apply for one — all from the same account.</p>
-      
+
       <h3 style="margin-top: 2rem;">I need a service <span class="badge">client</span></h3>
       <div class="journey-step">
         <div class="step-number">1</div>
@@ -391,17 +406,6 @@
         <h3><i class="fas fa-crown"></i> Provider subscriptions (optional)</h3>
         <p>Pro: unlimited applications, higher visibility. Business: team dashboard, verified badge.</p>
       </div>
-      <p>First 200 pilot users: zero fees.</p>
-    </section>
-
-    <!-- Call to action -->
-    <section style="text-align: center; margin-bottom: 2rem;">
-      <h2 style="border-bottom: none;">Be first in your neighborhood</h2>
-      <p style="font-size: 1.2rem;">BAROS is free during pilot. Shape the product.</p>
-      <div class="button-group" style="justify-content: center;">
-        <a href="#" class="button">Join waitlist <i class="fas fa-arrow-right"></i></a>
-      </div>
-      <p class="text-muted" style="margin-top: 1.5rem;">No spam. Only WhatsApp updates.</p>
     </section>
 
     <!-- Footer -->
