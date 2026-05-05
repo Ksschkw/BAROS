@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+venv/
+.venv/
+*.egg
+
+# Environment variables (CRITICAL)
+.env
+.env.local
+.env.*.local
+
+# Node / React
+node_modules/
+frontend/dist/
+frontend/build/
+
+# Solana / Anchor
+solana/target/
+solana/programs/**/target/
+solana/.anchor/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Database
+*.db
+*.sqlite3
+
+# Docker
+.docker/
+
+# Coverage
+htmlcov/
+.coverage
+
+baros_platform.json
+
+prd/
+
+seed.py
+
+solana/
+
+shared/

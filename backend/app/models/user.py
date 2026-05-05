@@ -1,0 +1,49 @@
+import uuid
+from sqlalchemy import Column, String, DateTime, Boolean, func
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship
+from geoalchemy2 import Geography
+from cryptography.fernet import Fernet
+from ..core.database import Base
+from ..core.config import settings
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email = Column(String(255), unique=True, nullable=False)
+    hashed_password = Column(String(255), nullable=True)               # null for OAuth users
+    google_id = Column(String(255), unique=True, nullable=True)
+    display_name = Column(String(100), nullable=False)
+    phone_number = Column(String(20), nullable=True)
+    profile_image_url = Column(String(500), nullable=True)
+    is_verified = Column(Boolean, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Solana wallet – public key is base58, private key is Fernet‑encrypted
+    wallet_public_key = Column(String(44), unique=True, nullable=True)
+    _wallet_private_key = Column("wallet_private_key", String(255), nullable=True)
+
+    # Geography
+    last_location = Column(Geography(geometry_type="POINT", srid=4326), nullable=True)
+    last_seen_at = Column(DateTime(timezone=True), nullable=True)
+
+    # Relationships
+    service_listings = relationship("ServiceListing", back_populates="provider")
+    client_jobs = relationship("Job", back_populates="client", foreign_keys="[Job.client_id]")
+    provider_jobs = relationship("Job", back_populates="provider", foreign_keys="[Job.provider_id]")
+    applications = relationship("Application", back_populates="applicant")
+    vouches_given = relationship("Vouch", back_populates="voucher", foreign_keys="[Vouch.voucher_id]")
+    vouches_received = relationship("Vouch", back_populates="vouchee", foreign_keys="[Vouch.vouchee_id]")
+    messages = relationship("Message", back_populates="sender")
+    disputes_as_client = relationship("Dispute", back_populates="client", foreign_keys="[Dispute.client_id]")
+    disputes_as_provider = relationship("Dispute", back_populates="provider", foreign_keys="[Dispute.provider_id]")
+
+    @property
+    def wallet_private_key(self) -> bytes | None:
+        """Decrypt and return the private key bytes."""
+        if not self._wallet_private_key:
+            return None
+        f = Fernet(settings.WALLET_ENCRYPTION_KEY.encode())  # key must be bytes
+        return f.decrypt(self._wallet_private_key.encode())
