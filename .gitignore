@@ -53,3 +53,7 @@ seed.py
 solana/
 
 shared/
+
+agent.js
+
+chat.js
