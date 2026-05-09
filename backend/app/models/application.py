@@ -17,3 +17,9 @@ class Application(Base):
 
     job = relationship("Job", back_populates="applications")
     applicant = relationship("User", back_populates="applications")
+
+    # # New fields
+    # applicant_name: Column(String(500), nullable=True)
+    # applicant_profile_image: Column(String(500), nullable=True)
+    # applicant_vouch_count: Column(String(500), nullable=True)
+    portfolio_url = Column(String(500), nullable=True)

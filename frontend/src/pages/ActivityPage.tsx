@@ -1,0 +1,579 @@
+import { useState } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
+import api from '@/lib/api'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
+// import { Separator } from '@/components/ui/separator'
+// import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar'
+import { useAuthStore } from '@/store/authStore'
+import {
+  MessageCircle,
+  Shield,
+  CheckCircle,
+  Star,
+  FileText,
+  ImagePlus,
+} from 'lucide-react'
+import type { components } from '@/types/api'
+
+type Job = components['schemas']['JobOut']
+type Message = components['schemas']['MessageOut']
+type ScopeAmendment = components['schemas']['ScopeAmendmentOut']
+
+// Helper to fetch user info
+// function useUserInfo(userId: string | undefined) {
+//   return useQuery({
+//     queryKey: ['user', userId],
+//     queryFn: async () => {
+//       const { data } = await api.get(`/users/${userId}`)
+//       return data
+//     },
+//     enabled: !!userId,
+//   })
+// }
+
+// Cloudinary upload helper
+async function uploadFile(file: File): Promise<string> {
+  const cloudName = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME
+  const preset = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('upload_preset', preset)
+  const res = await fetch(
+    `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`,
+    { method: 'POST', body: formData }
+  )
+  const data = await res.json()
+  if (!res.ok) {
+    toast.error('Upload failed: ' + (data.error?.message || ''))
+    throw new Error(data.error?.message || 'Upload failed')
+  }
+  toast.success('Image uploaded')
+  return data.secure_url
+}
+
+const statusBadge = (status: string) => {
+  switch (status) {
+    case 'open':
+      return <Badge className="bg-blue-100 text-blue-800">Open</Badge>
+    case 'assigned':
+      return <Badge className="bg-yellow-100 text-yellow-800">Assigned</Badge>
+    case 'funded':
+      return <Badge className="bg-green-100 text-green-800">Funded</Badge>
+    case 'in_progress':
+      return <Badge className="bg-purple-100 text-purple-800">In Progress</Badge>
+    case 'completed':
+      return <Badge className="bg-black text-white">Completed</Badge>
+    case 'cancelled':
+      return <Badge className="bg-red-100 text-red-800">Canceled</Badge>
+    default:
+      return <Badge>{status}</Badge>
+  }
+}
+
+export default function ActivityPage() {
+  const { user } = useAuthStore()
+  const queryClient = useQueryClient()
+  const [activeTab, setActiveTab] = useState<'clienting' | 'providing' | 'completed'>('clienting')
+
+  // Contract room state
+  const [contractRoomOpen, setContractRoomOpen] = useState(false)
+  const [contractRoomJob, setContractRoomJob] = useState<Job | null>(null)
+  const [messageText, setMessageText] = useState('')
+  const [showScopeAmend, setShowScopeAmend] = useState(false)
+  const [amendReason, setAmendReason] = useState('')
+  const [amendNewPrice, setAmendNewPrice] = useState('')
+  const [amendImage, setAmendImage] = useState<File | null>(null)
+  const [amendImagePreview, setAmendImagePreview] = useState<string | null>(null)
+
+  // Fetch all my jobs
+  const { data: allJobs, isLoading } = useQuery<Job[]>({
+    queryKey: ['myActivity'],
+    queryFn: async () => {
+      const [c, p] = await Promise.all([
+        api.get('/jobs/', { params: { my: 'client' } }),
+        api.get('/jobs/', { params: { my: 'provider' } }),
+      ])
+      return [...c.data, ...p.data]
+    },
+  })
+
+  // Categorize jobs
+  const clientingJobs =
+    allJobs?.filter(
+      (j) => j.client_id === user?.id && !['completed', 'cancelled'].includes(j.status)
+    ) || []
+  const providingJobs =
+    allJobs?.filter(
+      (j) => j.provider_id === user?.id && !['completed', 'cancelled'].includes(j.status)
+    ) || []
+  const completedJobs =
+    allJobs?.filter((j) => j.status === 'completed' || j.status === 'cancelled') || []
+
+  // Contract room messages
+  const { data: contractMessages, refetch: refetchMessages } = useQuery<Message[]>({
+    queryKey: ['messages', contractRoomJob?.id],
+    queryFn: async () => {
+      if (!contractRoomJob?.id) return []
+      const { data } = await api.get(`/messages/job/${contractRoomJob.id}`)
+      return data
+    },
+    enabled: !!contractRoomJob?.id && contractRoomOpen,
+    refetchInterval: 5000,
+  })
+
+  // Contract room amendments
+  const { data: contractAmendments, refetch: refetchAmendments } = useQuery<ScopeAmendment[]>({
+    queryKey: ['amendments', contractRoomJob?.id],
+    queryFn: async () => {
+      if (!contractRoomJob?.id) return []
+      const { data } = await api.get(`/amendments/job/${contractRoomJob.id}`)
+      return data
+    },
+    enabled: !!contractRoomJob?.id && contractRoomOpen,
+    refetchInterval: 5000,
+  })
+
+  // Mutations
+  const fundMutation = useMutation({
+    mutationFn: async (jobId: string) => {
+      await api.post(`/jobs/${jobId}/fund`)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['myActivity'] })
+      toast.success('Escrow funded on Solana!')
+    },
+    onError: (err: any) => toast.error(err.response?.data?.detail || 'Funding failed'),
+  })
+
+  const releaseMutation = useMutation({
+    mutationFn: async (jobId: string) => {
+      await api.post(`/jobs/${jobId}/release`)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['myActivity'] })
+      toast.success('Payment released!')
+    },
+    onError: (err: any) => toast.error(err.response?.data?.detail || 'Release failed'),
+  })
+
+  const vouchMutation = useMutation({
+    mutationFn: async (jobId: string) => {
+      await api.post('/vouches/', { job_id: jobId })
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['myActivity'] })
+      toast.success('Vouch recorded – cNFT minted on Solana!')
+    },
+    onError: (err: any) => toast.error(err.response?.data?.detail || 'Vouch failed'),
+  })
+
+  const sendMessageMutation = useMutation({
+    mutationFn: async ({
+      jobId,
+      content,
+    }: {
+      jobId: string
+      content: string
+    }) => {
+      await api.post('/messages/', { job_id: jobId, content })
+    },
+    onSuccess: () => {
+      refetchMessages()
+      setMessageText('')
+    },
+    onError: (err: any) => toast.error(err.response?.data?.detail || 'Message failed'),
+  })
+
+  const scopeAmendMutation = useMutation({
+    mutationFn: async () => {
+      if (!contractRoomJob?.id || !amendReason || !amendNewPrice) return
+      let imageUrl: string | undefined
+      if (amendImage) {
+        imageUrl = await uploadFile(amendImage)
+      }
+      await api.post(`/amendments/${contractRoomJob.id}`, {
+        proposed_by: 'provider',
+        reason: amendReason,
+        new_total_price: amendNewPrice,
+        additional_cost: '0',
+        image_url: imageUrl,
+      })
+    },
+    onSuccess: () => {
+      toast.success('Scope amendment proposed')
+      setShowScopeAmend(false)
+      setAmendReason('')
+      setAmendNewPrice('')
+      setAmendImage(null)
+      setAmendImagePreview(null)
+      refetchAmendments()
+    },
+    onError: (err: any) =>
+      toast.error(err.response?.data?.detail || 'Amendment failed'),
+  })
+
+  const acceptAmendMutation = useMutation({
+    mutationFn: async ({ id, accept }: { id: string; accept: boolean }) => {
+      await api.post(`/amendments/${id}/accept`, { accept })
+    },
+    onSuccess: (_, variables) => {
+      toast.success(variables.accept ? 'Amendment accepted!' : 'Amendment rejected!')
+      queryClient.invalidateQueries({ queryKey: ['myActivity'] })
+      refetchAmendments()
+      setContractRoomOpen(false)
+    },
+    onError: (err: any) => toast.error(err.response?.data?.detail || 'Action failed'),
+  })
+
+  const openContractRoom = (job: Job) => {
+    setContractRoomJob(job)
+    setContractRoomOpen(true)
+    setShowScopeAmend(false)
+  }
+
+  const handleSendMessage = () => {
+    if (!messageText.trim() || !contractRoomJob?.id) return
+    sendMessageMutation.mutate({
+      jobId: contractRoomJob.id,
+      content: messageText,
+    })
+  }
+
+  return (
+    <div className="space-y-6 animate-in fade-in duration-500">
+      <div>
+        <h1 className="text-3xl font-bold">My Activity</h1>
+        <p className="text-gray-500">
+          Track your jobs, escrow, and reputation
+        </p>
+      </div>
+
+      <Tabs
+        value={activeTab}
+        onValueChange={(v) => setActiveTab(v as typeof activeTab)}
+      >
+        <TabsList>
+          <TabsTrigger value="clienting">
+            Clienting ({clientingJobs.length})
+          </TabsTrigger>
+          <TabsTrigger value="providing">
+            Providing ({providingJobs.length})
+          </TabsTrigger>
+          <TabsTrigger value="completed">
+            Completed ({completedJobs.length})
+          </TabsTrigger>
+        </TabsList>
+
+        {(['clienting', 'providing', 'completed'] as const).map((tab) => (
+          <TabsContent key={tab} value={tab} className="mt-4">
+            {isLoading ? (
+              <Skeleton className="h-20 w-full" />
+            ) : (
+              (tab === 'clienting'
+                ? clientingJobs
+                : tab === 'providing'
+                ? providingJobs
+                : completedJobs
+              ).length === 0 ? (
+                <div className="text-center py-12 text-gray-500">
+                  No jobs here yet.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {(tab === 'clienting'
+                    ? clientingJobs
+                    : tab === 'providing'
+                    ? providingJobs
+                    : completedJobs
+                  ).map((job) => (
+                    <Card
+                      key={job.id}
+                      className="bg-white border border-gray-100"
+                    >
+                      <CardHeader className="pb-2">
+                        <div className="flex justify-between">
+                          <CardTitle className="text-base">
+                            {job.title}
+                          </CardTitle>
+                          {statusBadge(job.status)}
+                        </div>
+                      </CardHeader>
+                      <CardContent className="text-sm">
+                        <p className="text-gray-600 mb-2">
+                          ₦
+                          {parseFloat(
+                            job.price as string
+                          ).toLocaleString()}
+                        </p>
+                        {job.escrow_address && (
+                          <p className="text-xs text-green-600 mb-2">
+                            Escrow: {job.escrow_address.slice(0, 8)}...
+                          </p>
+                        )}
+                        {job.image_url && (
+                          <img
+                            src={job.image_url}
+                            className="rounded-lg w-20 h-20 object-cover mb-2"
+                          />
+                        )}
+                        <div className="flex gap-2 flex-wrap">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => openContractRoom(job)}
+                          >
+                            <MessageCircle className="w-3 h-3 mr-1" />{' '}
+                            Contract Room
+                          </Button>
+                          {tab === 'clienting' &&
+                            job.status === 'assigned' && (
+                              <Button
+                                size="sm"
+                                onClick={() =>
+                                  fundMutation.mutate(job.id)
+                                }
+                                className="bg-green-600 text-white"
+                              >
+                                <Shield className="w-3 h-3 mr-1" />{' '}
+                                Fund
+                              </Button>
+                            )}
+                          {tab === 'clienting' &&
+                            job.status === 'funded' && (
+                              <Button
+                                size="sm"
+                                onClick={() =>
+                                  releaseMutation.mutate(job.id)
+                                }
+                                className="bg-blue-600 text-white"
+                              >
+                                <CheckCircle className="w-3 h-3 mr-1" />{' '}
+                                Release
+                              </Button>
+                            )}
+                          {tab === 'completed' &&
+                            job.client_id === user?.id && (
+                              <Button
+                                size="sm"
+                                onClick={() =>
+                                  vouchMutation.mutate(job.id)
+                                }
+                                className="bg-yellow-600 text-white"
+                              >
+                                <Star className="w-3 h-3 mr-1" />{' '}
+                                Vouch
+                              </Button>
+                            )}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )
+            )}
+          </TabsContent>
+        ))}
+      </Tabs>
+
+      {/* Contract Room Dialog */}
+      {contractRoomJob && (
+        <Dialog
+          open={contractRoomOpen}
+          onOpenChange={setContractRoomOpen}
+        >
+          <DialogContent className="sm:max-w-lg bg-white text-black max-h-[80vh] flex flex-col">
+            <DialogHeader>
+              <DialogTitle>
+                {contractRoomJob.title} — Contract Room
+              </DialogTitle>
+            </DialogHeader>
+
+            {/* Job info */}
+            <div className="bg-gray-50 rounded-lg p-3 text-sm space-y-1">
+              <p>Status: {statusBadge(contractRoomJob.status)}</p>
+              <p>
+                Price: ₦
+                {parseFloat(
+                  contractRoomJob.price as string
+                ).toLocaleString()}
+              </p>
+              {contractRoomJob.escrow_address && (
+                <p className="text-xs text-green-600">
+                  Escrow: {contractRoomJob.escrow_address.slice(0, 8)}...
+                </p>
+              )}
+              {contractRoomJob.image_url && (
+                <img
+                  src={contractRoomJob.image_url}
+                  className="rounded-lg w-20 h-20 object-cover mt-2"
+                />
+              )}
+            </div>
+
+            {/* Pending Amendments */}
+            {contractAmendments?.filter(a => a.is_accepted === null).map((amend) => (
+              <div key={amend.id} className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 text-sm space-y-2 mt-2">
+                <p className="font-bold text-yellow-800">Scope Amendment Proposed</p>
+                <p><strong>Reason:</strong> {amend.reason}</p>
+                <p><strong>New Price:</strong> ₦{parseFloat(amend.new_total_price as string).toLocaleString()}</p>
+                {amend.image_url && <img src={amend.image_url} className="rounded-lg w-full max-h-32 object-cover mt-2" />}
+                {contractRoomJob?.client_id === user?.id && (
+                  <div className="flex gap-2 pt-2">
+                    <Button
+                      size="sm"
+                      className="bg-green-600 text-white"
+                      onClick={() => acceptAmendMutation.mutate({ id: amend.id, accept: true })}
+                      disabled={acceptAmendMutation.isPending}
+                    >
+                      Accept
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={() => acceptAmendMutation.mutate({ id: amend.id, accept: false })}
+                      disabled={acceptAmendMutation.isPending}
+                    >
+                      Reject
+                    </Button>
+                  </div>
+                )}
+                {contractRoomJob?.provider_id === user?.id && (
+                  <p className="text-xs text-yellow-600">Waiting for client to accept...</p>
+                )}
+              </div>
+            ))}
+
+            {/* Messages */}
+            <div className="flex-1 overflow-y-auto space-y-2 py-2">
+              {contractMessages?.map((msg) => (
+                <div
+                  key={msg.id}
+                  className={`flex ${
+                    msg.sender_id === user?.id
+                      ? 'justify-end'
+                      : 'justify-start'
+                  }`}
+                >
+                  <div
+                    className={`max-w-[75%] rounded-lg p-3 ${
+                      msg.sender_id === user?.id
+                        ? 'bg-black text-white'
+                        : 'bg-gray-100 text-black'
+                    }`}
+                  >
+                    <p className="text-sm">{msg.content}</p>
+                    <span className="text-xs opacity-70">
+                      {new Date(msg.created_at).toLocaleTimeString()}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Message input or amendment form */}
+            {!showScopeAmend ? (
+              <div className="border-t pt-2 flex gap-2">
+                <Input
+                  placeholder="Type a message..."
+                  value={messageText}
+                  onChange={(e) => setMessageText(e.target.value)}
+                  onKeyDown={(e) =>
+                    e.key === 'Enter' && handleSendMessage()
+                  }
+                />
+                <Button
+                  size="sm"
+                  onClick={handleSendMessage}
+                  disabled={!messageText.trim()}
+                  className="bg-black text-white"
+                >
+                  Send
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setShowScopeAmend(true)}
+                >
+                  <FileText className="w-4 h-4 mr-1" /> Amend
+                </Button>
+              </div>
+            ) : (
+              <div className="border-t pt-2 space-y-2">
+                <Textarea
+                  placeholder="Reason for amendment..."
+                  value={amendReason}
+                  onChange={(e) => setAmendReason(e.target.value)}
+                />
+                <Input
+                  placeholder="New total price"
+                  type="number"
+                  value={amendNewPrice}
+                  onChange={(e) => setAmendNewPrice(e.target.value)}
+                />
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={() =>
+                      document
+                        .getElementById('activityAmendImage')
+                        ?.click()
+                    }
+                  >
+                    <ImagePlus className="w-4 h-4 mr-1" /> Attach
+                    Image
+                  </Button>
+                  <input
+                    id="activityAmendImage"
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0]
+                      if (file) {
+                        setAmendImage(file)
+                        setAmendImagePreview(
+                          URL.createObjectURL(file)
+                        )
+                      }
+                    }}
+                  />
+                  {amendImagePreview && (
+                    <img
+                      src={amendImagePreview}
+                      className="w-12 h-12 rounded-lg object-cover"
+                    />
+                  )}
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    onClick={() => scopeAmendMutation.mutate()}
+                    disabled={!amendReason || !amendNewPrice}
+                    className="bg-black text-white"
+                  >
+                    Submit Amendment
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setShowScopeAmend(false)}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
+      )}
+    </div>
+  )
+}

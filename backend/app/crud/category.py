@@ -26,3 +26,11 @@ async def create_category(db: AsyncSession, name: str) -> Category:
 async def delete_category(db: AsyncSession, category: Category) -> None:
     await db.delete(category)
     await db.commit()
+
+from sqlalchemy import or_
+
+async def search_categories(db: AsyncSession, query: str) -> List[Category]:
+    result = await db.execute(
+        select(Category).where(Category.name.ilike(f"%{query}%")).order_by(Category.name)
+    )
+    return result.scalars().all()

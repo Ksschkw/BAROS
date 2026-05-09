@@ -12,6 +12,7 @@ class Message(Base):
     job_id = Column(UUID(as_uuid=True), ForeignKey("jobs.id"), nullable=False)
     sender_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     content = Column(Text, nullable=False)
+    image_url = Column(String(500), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     job = relationship("Job", back_populates="messages")

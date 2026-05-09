@@ -1,6 +1,11 @@
+import uuid
+from uuid import UUID
+import random
 from fastapi import APIRouter, Depends, HTTPException, Header, status
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from ....core.dependencies import get_db, get_current_user
+from ....core.config import settings
 from ....crud.dispute import (
     get_dispute_by_id,
     get_dispute_by_job,
@@ -8,20 +13,24 @@ from ....crud.dispute import (
     resolve_dispute,
 )
 from ....crud.job import get_job_by_id, update_job_status
-from ....crud.user import get_user_by_id
-from ....schemas.dispute import DisputeCreate, DisputeResolve, DisputeOut
+from ....crud.user import get_user_by_id, get_eligible_jurors
+from ....crud.vote import create_vote, get_votes_for_dispute
+from ....crud.jury_panel import create_jury_panel, is_juror
 from ....models.user import User
+from ....models.vote import VoteOption
+from ....schemas.dispute import DisputeCreate, DisputeResolve, DisputeOut
+from ....schemas.vote import VoteCreate, VoteOut
 from ....services.solana_client import release_escrow, cancel_escrow
-from ....core.config import settings
+from ....services.brevo_client import send_email
 from solders.pubkey import Pubkey
-import uuid
-from ....models.job import Job
 
 router = APIRouter()
 
+# Devnet USDC mint
 USDC_MINT = Pubkey.from_string(settings.USDC_MINT_DEVNET)
 
-ADMIN_SECRET = "baros_admin_secret_2026"
+# Admin secret for admin-only endpoints
+ADMIN_SECRET = settings.ADMIN_SECRET
 
 
 async def verify_admin(x_admin_secret: str | None = Header(None)):
@@ -45,22 +54,198 @@ async def raise_dispute(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Dispute already exists")
     if job.status not in ("funded", "in_progress"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Can only dispute an active job")
+
     await update_job_status(db, job, "disputed")
     dispute = await create_dispute(db, job.client_id, job.provider_id, dispute_data)
     return dispute
 
 
 @router.get("/{dispute_id}", response_model=DisputeOut)
-async def get_dispute(dispute_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def get_dispute(dispute_id: UUID, db: AsyncSession = Depends(get_db)):
     dispute = await get_dispute_by_id(db, dispute_id)
     if not dispute:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dispute not found")
     return dispute
 
 
+@router.post("/{dispute_id}/jury/select", response_model=list[str])
+async def select_jury(
+    dispute_id: UUID,
+    _: bool = Depends(verify_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    dispute = await get_dispute_by_id(db, dispute_id)
+    if not dispute:
+        raise HTTPException(status_code=404, detail="Dispute not found")
+    job = await get_job_by_id(db, dispute.job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if dispute.status != "open":
+        raise HTTPException(status_code=400, detail="Dispute must be open to select a jury")
+
+    # Eligible jurors: same neighbourhood (within 5 km), at least 1 vouch
+    eligible = await get_eligible_jurors(db, job.location, min_vouches=1)
+
+    if len(eligible) < 3:
+        raise HTTPException(status_code=400, detail="Not enough eligible jurors in the neighbourhood")
+
+    # Exclude the client and provider
+    candidates = [u for u in eligible if u.id not in (dispute.client_id, dispute.provider_id)]
+    if len(candidates) < 3:
+        raise HTTPException(status_code=400, detail="Insufficient jurors after excluding parties")
+
+    num_jurors = min(5, len(candidates))
+    jurors = random.sample(candidates, num_jurors)
+    juror_ids = [str(u.id) for u in jurors]
+
+    # Save jury panel to DB
+    await create_jury_panel(db, dispute_id, [u.id for u in jurors])
+    await db.commit()
+
+    # Notify each juror by email (non‑blocking)
+    for juror in jurors:
+        try:
+            await send_email(
+                to_email=juror.email,
+                subject="You have been selected as a BAROS juror",
+                html_content=f"""
+                <h2>You've Been Selected as a Juror</h2>
+                <p>A dispute has arisen in your neighbourhood for job <strong>{job.title}</strong>.</p>
+                <p>Please log into BAROS and review the case. Your vote will help decide the outcome.</p>
+                <p><a href="https://baros.app/disputes/{dispute_id}">View Dispute</a></p>
+                """
+            )
+        except Exception:
+            pass
+
+    return juror_ids
+
+
+@router.post("/{dispute_id}/vote", response_model=VoteOut)
+async def cast_vote(
+    dispute_id: UUID,
+    vote_data: VoteCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    dispute = await get_dispute_by_id(db, dispute_id)
+    if not dispute:
+        raise HTTPException(status_code=404, detail="Dispute not found")
+    if dispute.status != "open":
+        raise HTTPException(status_code=400, detail="Dispute is not open for voting")
+
+    # Only selected jurors can vote
+    if not await is_juror(db, dispute_id, current_user.id):
+        raise HTTPException(status_code=403, detail="You are not a juror for this dispute")
+
+    # Prevent double voting
+    existing_votes = await get_votes_for_dispute(db, dispute_id)
+    if any(v.juror_id == current_user.id for v in existing_votes):
+        raise HTTPException(status_code=409, detail="You have already voted")
+
+    vote = await create_vote(db, dispute_id, current_user.id, vote_data.vote)
+    await db.commit()
+    await db.refresh(vote)
+    return vote
+
+
+@router.get("/{dispute_id}/results")
+async def tally_votes(
+    dispute_id: UUID,
+    _: bool = Depends(verify_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    dispute = await get_dispute_by_id(db, dispute_id)
+    if not dispute:
+        raise HTTPException(status_code=404, detail="Dispute not found")
+
+    votes = await get_votes_for_dispute(db, dispute_id)
+    for_client = sum(1 for v in votes if v.vote == VoteOption.FOR_CLIENT)
+    for_provider = sum(1 for v in votes if v.vote == VoteOption.FOR_PROVIDER)
+    total = len(votes)
+
+    if total == 0:
+        return {"result": "tie", "for_client": 0, "for_provider": 0}
+
+    if for_client > for_provider:
+        outcome = "refund"
+    elif for_provider > for_client:
+        outcome = "release"
+    else:
+        outcome = "tie"
+        return {"result": "tie", "for_client": for_client, "for_provider": for_provider}
+
+    # Execute on‑chain action automatically
+    job = await get_job_by_id(db, dispute.job_id)
+    if not job or job.status != "disputed":
+        raise HTTPException(status_code=400, detail="Job is not in disputed state")
+
+    client_user = await get_user_by_id(db, job.client_id)
+    provider_user = await get_user_by_id(db, job.provider_id)
+
+    TOKEN_PROGRAM = Pubkey.from_string("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
+    ATA_PROGRAM = Pubkey.from_string("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL")
+
+    # Derive escrow PDA
+    job_id_int = int(job.contract_job_id, 16)
+    escrow_pubkey = Pubkey.find_program_address(
+        [b"escrow", bytes(Pubkey.from_string(client_user.wallet_public_key)), job_id_int.to_bytes(8, "little")],
+        Pubkey.from_string(settings.BAROS_PROGRAM_ID),
+    )[0]
+
+    # Derive vault ATA
+    vault_ata = Pubkey.find_program_address(
+        [bytes(escrow_pubkey), bytes(TOKEN_PROGRAM), bytes(USDC_MINT)],
+        ATA_PROGRAM,
+    )[0]
+
+    # Derive client and provider ATAs
+    client_ata = Pubkey.find_program_address(
+        [bytes(Pubkey.from_string(client_user.wallet_public_key)), bytes(TOKEN_PROGRAM), bytes(USDC_MINT)],
+        ATA_PROGRAM,
+    )[0]
+    provider_ata = Pubkey.find_program_address(
+        [bytes(Pubkey.from_string(provider_user.wallet_public_key)), bytes(TOKEN_PROGRAM), bytes(USDC_MINT)],
+        ATA_PROGRAM,
+    )[0]
+
+    tx_sig = ""
+    try:
+        if outcome == "refund":
+            tx_sig = await cancel_escrow(
+                client_pubkey=client_user.wallet_public_key,
+                client_ata=str(client_ata),
+                vault_ata=str(vault_ata),
+                escrow_address=str(escrow_pubkey),
+            )
+            await update_job_status(db, job, "cancelled")
+        else:  # release
+            tx_sig = await release_escrow(
+                client_pubkey=client_user.wallet_public_key,
+                provider_ata=str(provider_ata),
+                vault_ata=str(vault_ata),
+                escrow_address=str(escrow_pubkey),
+            )
+            await update_job_status(db, job, "completed")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Solana transaction failed: {str(e)}")
+
+    # Mark dispute resolved
+    dispute = await resolve_dispute(db, dispute, outcome)
+    await db.commit()
+
+    return {
+        "result": outcome,
+        "for_client": for_client,
+        "for_provider": for_provider,
+        "total": total,
+        "transaction": str(tx_sig),
+    }
+
+
 @router.post("/{dispute_id}/resolve", response_model=DisputeOut)
 async def resolve_dispute_route(
-    dispute_id: uuid.UUID,
+    dispute_id: UUID,
     resolution_data: DisputeResolve,
     _: bool = Depends(verify_admin),
     db: AsyncSession = Depends(get_db),
@@ -78,46 +263,49 @@ async def resolve_dispute_route(
     client_user = await get_user_by_id(db, job.client_id)
     provider_user = await get_user_by_id(db, job.provider_id)
 
+    TOKEN_PROGRAM = Pubkey.from_string("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
+    ATA_PROGRAM = Pubkey.from_string("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL")
+
     escrow_pubkey = Pubkey.find_program_address(
-        [b"escrow", bytes(Pubkey.from_string(client_user.wallet_public_key)), int(job.contract_job_id, 16).to_bytes(8, 'little')],
+        [b"escrow", bytes(Pubkey.from_string(client_user.wallet_public_key)), int(job.contract_job_id, 16).to_bytes(8, "little")],
         Pubkey.from_string(settings.BAROS_PROGRAM_ID)
     )[0]
 
     vault_ata = Pubkey.find_program_address(
-        [bytes(escrow_pubkey), bytes(Pubkey.from_string("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")), bytes(USDC_MINT)],
-        Pubkey.from_string("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL")
+        [bytes(escrow_pubkey), bytes(TOKEN_PROGRAM), bytes(USDC_MINT)],
+        ATA_PROGRAM
     )[0]
 
     client_ata = Pubkey.find_program_address(
-        [bytes(Pubkey.from_string(client_user.wallet_public_key)), bytes(Pubkey.from_string("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")), bytes(USDC_MINT)],
-        Pubkey.from_string("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL")
+        [bytes(Pubkey.from_string(client_user.wallet_public_key)), bytes(TOKEN_PROGRAM), bytes(USDC_MINT)],
+        ATA_PROGRAM
     )[0]
 
     provider_ata = Pubkey.find_program_address(
-        [bytes(Pubkey.from_string(provider_user.wallet_public_key)), bytes(Pubkey.from_string("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")), bytes(USDC_MINT)],
-        Pubkey.from_string("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL")
+        [bytes(Pubkey.from_string(provider_user.wallet_public_key)), bytes(TOKEN_PROGRAM), bytes(USDC_MINT)],
+        ATA_PROGRAM
     )[0]
 
     try:
         if resolution_data.resolution == "refund":
-            tx = await cancel_escrow(
-                client_pubkey=str(Pubkey.from_string(client_user.wallet_public_key)),
+            await cancel_escrow(
+                client_pubkey=str(client_user.wallet_public_key),
                 client_ata=str(client_ata),
                 vault_ata=str(vault_ata),
                 escrow_address=str(escrow_pubkey),
             )
             await update_job_status(db, job, "cancelled")
         elif resolution_data.resolution == "release":
-            tx = await release_escrow(
-                client_pubkey=str(Pubkey.from_string(client_user.wallet_public_key)),
+            await release_escrow(
+                client_pubkey=str(client_user.wallet_public_key),
                 provider_ata=str(provider_ata),
                 vault_ata=str(vault_ata),
                 escrow_address=str(escrow_pubkey),
             )
             await update_job_status(db, job, "completed")
-        else:
-            tx = await release_escrow(
-                client_pubkey=str(Pubkey.from_string(client_user.wallet_public_key)),
+        else:  # fallback to release
+            await release_escrow(
+                client_pubkey=str(client_user.wallet_public_key),
                 provider_ata=str(provider_ata),
                 vault_ata=str(vault_ata),
                 escrow_address=str(escrow_pubkey),

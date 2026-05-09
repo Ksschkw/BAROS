@@ -41,12 +41,14 @@ async def create_message(
     db: AsyncSession,
     job_id: UUID,
     sender_id: UUID,
-    content: str
+    content: str,
+    image_url: str | None = None
 ) -> Message:
     message = Message(
         job_id=job_id,
         sender_id=sender_id,
         content=content,
+        image_url=image_url
     )
     db.add(message)
     await db.commit()

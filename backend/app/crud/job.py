@@ -1,4 +1,5 @@
 from uuid import UUID
+import uuid
 from typing import List, Optional
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -55,21 +56,24 @@ async def create_job(db: AsyncSession, client_id: UUID, job_in: JobCreate) -> Jo
         title=job_in.title,
         description=job_in.description,
         price=job_in.price,
+        min_price=job_in.min_price,
+        max_price=job_in.max_price,
+        image_url=job_in.image_url,
         status="open",
-        contract_job_id=hex(uuid.uuid4().int & 0xFFFFFFFFFFFFFFFF)  # unique hex string
+        contract_job_id=hex(uuid.uuid4().int & 0xFFFFFFFFFFFFFFFF)
     )
     if job_in.latitude is not None and job_in.longitude is not None:
         job.location = f"SRID=4326;POINT({job_in.longitude} {job_in.latitude})"
     db.add(job)
-    await db.commit()
-    await db.refresh(job)
+    await db.flush()
+    # await db.refresh(job)
     return job
 
 async def assign_job(db: AsyncSession, job: Job, provider_id: UUID) -> Job:
     job.provider_id = provider_id
     job.status = "assigned"
-    await db.commit()
-    await db.refresh(job)
+    await db.flush()
+    # await db.refresh(job)
     return job
 
 async def update_job_status(
@@ -88,8 +92,8 @@ async def update_job_status(
     job.status = new_status
     if escrow_address:
         job.escrow_address = escrow_address
-    await db.commit()
-    await db.refresh(job)
+    await db.flush()
+    # await db.refresh(job)
     return job
 
 async def cancel_job_offchain(db: AsyncSession, job: Job) -> Job:
@@ -117,12 +121,11 @@ async def get_jobs_filtered(
     latitude: Optional[float] = None,
     longitude: Optional[float] = None,
     radius_km: float = 10.0,
+    search_text: Optional[str] = None,
+    sort_by: Optional[str] = None,
     limit: int = 20,
     offset: int = 0
 ) -> List[Job]:
-    """
-    Flexible job search with optional filters.
-    """
     query = select(Job)
     conditions = []
 
@@ -131,30 +134,51 @@ async def get_jobs_filtered(
     if provider_id:
         conditions.append(Job.provider_id == provider_id)
     if status:
-        # comma-separated list of statuses
         statuses = [s.strip() for s in status.split(",")]
         conditions.append(Job.status.in_(statuses))
     if category_id:
-        # need to join with ServiceListing to filter by category
         query = query.join(ServiceListing, Job.service_listing_id == ServiceListing.id)
         conditions.append(ServiceListing.category_id == category_id)
     if min_price is not None:
         conditions.append(Job.price >= min_price)
     if max_price is not None:
         conditions.append(Job.price <= max_price)
+
+    # ---- GEOGRAPHY -----
+    point = None
     if latitude is not None and longitude is not None:
         point = f"SRID=4326;POINT({longitude} {latitude})"
         conditions.append(
-            geo_func.ST_DWithin(Job.location, point, radius_km * 1000)
+            geo_func.ST_DWithin(
+                Job.location,
+                func.ST_GeogFromText(point),       # ← geography, not geometry
+                radius_km * 1000
+            )
         )
-        query = query.order_by(
-            geo_func.ST_DistanceSphere(Job.location, point)
-        )
-    else:
-        query = query.order_by(Job.created_at.desc())
+
+    if search_text:
+        conditions.append(Job.title.ilike(f"%{search_text}%"))
 
     if conditions:
         query = query.where(and_(*conditions))
+
+    # ---- SORTING ----
+    if sort_by == 'price_asc':
+        query = query.order_by(Job.price.asc())
+    elif sort_by == 'price_desc':
+        query = query.order_by(Job.price.desc())
+    elif sort_by == 'newest':
+        query = query.order_by(Job.created_at.desc())
+    elif sort_by == 'nearest' and point is not None:
+        # Use ST_Distance on geography for correct spherical distance
+        query = query.order_by(
+            geo_func.ST_Distance(
+                Job.location,
+                func.ST_GeogFromText(point)
+            )
+        )
+    else:
+        query = query.order_by(Job.created_at.desc())
 
     query = query.limit(limit).offset(offset)
     result = await db.execute(query)

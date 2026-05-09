@@ -37,6 +37,11 @@ class Job(Base):
     contract_job_id = Column(String(50), unique=True, nullable=True)
     # We'll store the hex of the lower 64 bits of the UUID when the job is created
 
+    min_price = Column(Numeric(10, 2), nullable=True)
+    max_price = Column(Numeric(10, 2), nullable=True)
+
+    image_url = Column(String(500), nullable=True)
+
     @property
     def latitude(self) -> float | None:
         if self.location is None:

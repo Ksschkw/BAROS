@@ -1,0 +1,60 @@
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { useAuthStore } from '@/store/authStore'
+import { useEffect } from 'react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { ToastProvider } from '@/components/ToastProvider'
+import LandingPage from '@/pages/LandingPage'
+import DashboardLayout from '@/components/DashboardLayout'
+import HomePage from '@/pages/HomePage'
+import JobsPage from '@/pages/JobsPage'
+import ServicesPage from '@/pages/ServicesPage'
+import ActivityPage from '@/pages/ActivityPage'
+import MessagesPage from '@/pages/MessagesPage'
+import ProfilePage from '@/pages/ProfilePage'
+
+const queryClient = new QueryClient()
+
+function ProtectedRoute({ children }: { children: React.ReactNode }) {
+  const { user, isLoading } = useAuthStore()
+  if (isLoading) return <div className="flex h-screen items-center justify-center">Loading…</div>
+  if (!user) return <Navigate to="/" replace />
+  return children
+}
+
+function App() {
+  const { fetchUser, isLoading } = useAuthStore()
+
+  useEffect(() => {
+    fetchUser()
+  }, [])
+
+  if (isLoading) return <div className="flex h-screen items-center justify-center">Loading…</div>
+
+  return (
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>
+        <ToastProvider />
+        <Routes>
+          <Route path="/" element={<LandingPage />} />
+          <Route
+            path="/dashboard"
+            element={
+              <ProtectedRoute>
+                <DashboardLayout />
+              </ProtectedRoute>
+            }
+          >
+            <Route index element={<HomePage />} />
+            <Route path="jobs" element={<JobsPage />} />
+            <Route path="services" element={<ServicesPage />} />
+            <Route path="activity" element={<ActivityPage />} />
+            <Route path="messages" element={<MessagesPage />} />
+            <Route path="profile" element={<ProfilePage />} />
+          </Route>
+        </Routes>
+      </BrowserRouter>
+    </QueryClientProvider>
+  )
+}
+
+export default App

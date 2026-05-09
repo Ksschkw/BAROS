@@ -1,0 +1,1 @@
+Wrap the final DB write in async with db.begin(): to ensure atomicity, and do external API calls outside the block if they are not part of the transaction.

@@ -60,7 +60,7 @@ async def create_user(db: AsyncSession, user_in: UserCreate) -> User:
     await db.refresh(user)
     return user
 
-async def create_user_from_google(db: AsyncSession, email: str, google_id: str, display_name: str) -> User:
+async def create_user_from_google(db: AsyncSession, email: str, google_id: str, display_name: str, profile_image_url: str | None = None) -> User:
     keypair = Keypair()
     f = Fernet(settings.WALLET_ENCRYPTION_KEY.encode())
 
@@ -72,6 +72,7 @@ async def create_user_from_google(db: AsyncSession, email: str, google_id: str, 
         email=email,
         google_id=google_id,
         display_name=display_name,
+        profile_image_url=profile_image_url,
         is_verified=True,
         wallet_public_key=str(keypair.pubkey()),
         _wallet_private_key=encrypted_secret,
@@ -109,3 +110,27 @@ async def update_user_location(db: AsyncSession, user: User, latitude: float, lo
     await db.commit()
     await db.refresh(user)
     return user
+
+from sqlalchemy import func, text
+from geoalchemy2 import Geography
+from ..models.vouch import Vouch
+from ..models.user import User
+
+async def get_eligible_jurors(db: AsyncSession, job_location: Geography, min_vouches: int = 1) -> List[User]:
+    # Find users within 5 km of the job's location who have at least `min_vouches` vouches
+    distance_col = geo_func.ST_DistanceSphere(User.last_location, func.ST_GeomFromEWKT(func.ST_AsEWKT(job_location))).label("distance")
+    subq = select(Vouch.vouchee_id, func.count(Vouch.id).label("vouch_count")).group_by(Vouch.vouchee_id).having(func.count(Vouch.id) >= min_vouches).subquery()
+    query = (
+        select(User)
+        .join(subq, User.id == subq.c.vouchee_id)
+        .where(
+            geo_func.ST_DWithin(
+                User.last_location,
+                job_location,
+                5000  # 5 km in meters
+            ),
+            User.last_location.isnot(None)
+        )
+    )
+    result = await db.execute(query)
+    return result.scalars().all()

@@ -30,11 +30,20 @@ async def get_services_nearby(
 ) -> List[ServiceListing]:
     # Distance calculation in meters using PostGIS
     point = f"SRID=4326;POINT({longitude} {latitude})"
-    distance_col = geo_func.ST_DistanceSphere(ServiceListing.location, point).label("distance")
+    # distance_col = geo_func.ST_DistanceSphere(ServiceListing.location, point).label("distance")
+    distance_col = geo_func.ST_Distance(
+        ServiceListing.location,
+        func.ST_GeogFromText(point)
+    ).label("distance")
 
     query = select(ServiceListing, distance_col).where(
+        # geo_func.ST_DWithin(
+        #     ServiceListing.location, point, radius_km * 1000  # convert km to meters
+        # )
         geo_func.ST_DWithin(
-            ServiceListing.location, point, radius_km * 1000  # convert km to meters
+            ServiceListing.location,
+            func.ST_GeogFromText(point),
+            radius_km * 1000
         )
     )
 
@@ -54,6 +63,7 @@ async def create_service(db: AsyncSession, provider_id: UUID, service_in: Servic
         price=service_in.price,
         location=f"SRID=4326;POINT({service_in.longitude} {service_in.latitude})",
         radius_km=service_in.radius_km or 5.0,
+        image_url=service_in.image_url,
     )
     db.add(service)
     # await db.commit()
@@ -70,21 +80,21 @@ async def update_service(db: AsyncSession, service: ServiceListing, service_in: 
                 service.location = f"SRID=4326;POINT({service_in.longitude} {service_in.latitude})"
         else:
             setattr(service, field, value)
-    await db.commit()
-    await db.refresh(service)
+    await db.flush()
+    # await db.refresh(service)
     return service
 
 async def toggle_service_active(db: AsyncSession, service: ServiceListing, is_active: bool) -> ServiceListing:
     service.is_active = is_active
-    await db.commit()
-    await db.refresh(service)
+    await db.flush()
+    # await db.refresh(service)
     return service
 
 async def delete_service(db: AsyncSession, service: ServiceListing) -> None:
     # Check if there are active jobs on this service listing
     # That check will be done in the endpoint; here we just delete.
     await db.delete(service)
-    await db.commit()
+    await db.flush()
 
 async def search_services_by_text(
     db: AsyncSession,

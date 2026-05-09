@@ -27,3 +27,6 @@ class Dispute(Base):
     job = relationship("Job", back_populates="disputes")
     client = relationship("User", back_populates="disputes_as_client", foreign_keys=[client_id])
     provider = relationship("User", back_populates="disputes_as_provider", foreign_keys=[provider_id])
+
+    votes = relationship("Vote", back_populates="dispute")
+    jury_panels = relationship("JuryPanel", back_populates="dispute")

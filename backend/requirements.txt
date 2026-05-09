@@ -13,7 +13,7 @@ authlib
 httpx 
 hishel 
 solders 
-anchorpy
+anchorpy3
 cloudinary 
 python-dotenv 
 geoalchemy2 

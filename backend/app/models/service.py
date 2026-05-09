@@ -19,11 +19,16 @@ class ServiceListing(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     location = Column(Geography(geometry_type="POINT", srid=4326), nullable=False)
-    radius_km = Column(Numeric(5, 2), default=5.0)
+    radius_km = Column(Numeric(10, 2), default=5.0)
 
     provider = relationship("User", back_populates="service_listings")
     category = relationship("Category")
     jobs = relationship("Job", back_populates="service_listing")
+
+    min_price = Column(Numeric(10, 2), nullable=True)
+    max_price = Column(Numeric(10, 2), nullable=True)
+
+    image_url = Column(String(500), nullable=True)
 
     # ───── location helpers ─────
     @property

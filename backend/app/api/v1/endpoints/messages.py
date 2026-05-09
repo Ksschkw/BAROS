@@ -26,4 +26,4 @@ async def send_message(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    return await create_message(db, msg.job_id, current_user.id, msg.content)
+    return await create_message(db, msg.job_id, current_user.id, msg.content, msg.image_url)

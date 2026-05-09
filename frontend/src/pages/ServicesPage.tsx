@@ -1,0 +1,555 @@
+import { useState, useEffect, useRef } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
+import api from '@/lib/api'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
+import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
+import { Badge } from '@/components/ui/badge'
+import { Skeleton } from '@/components/ui/skeleton'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar'
+import { useGeolocation } from '@/hooks/useGeolocation'
+import { useAuthStore } from '@/store/authStore'
+import {
+  MapPin, Search, Plus, Edit, Trash2, RefreshCw, X, Send, ImagePlus, Shield
+} from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { NeighborhoodMap } from '@/components/NeighborhoodMap'
+import type { components } from '@/types/api'
+
+// ---------- Types ----------
+type Service = components['schemas']['ServiceOut']
+type Category = components['schemas']['CategoryOut']
+type ServiceCreate = components['schemas']['ServiceCreate']
+type ServiceUpdate = components['schemas']['ServiceUpdate']
+type UserProfile = components['schemas']['UserOut']
+
+// ---------- Helper: fetch user by ID ----------
+function useUserInfo(userId: string | undefined) {
+  return useQuery<UserProfile>({
+    queryKey: ['user', userId],
+    queryFn: async () => {
+      const { data } = await api.get(`/users/${userId}`)
+      return data
+    },
+    enabled: !!userId,
+  })
+}
+
+// ---------- Cloudinary upload ----------
+async function uploadFile(file: File): Promise<string> {
+  const cloudName = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME
+  const preset = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('upload_preset', preset)
+  const res = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, {
+    method: 'POST',
+    body: formData,
+  })
+  if (!res.ok) {
+    const err = await res.json()
+    toast.error('Image upload failed: ' + (err.error?.message || ''))
+    throw new Error(err.error?.message || 'Upload failed')
+  }
+  const data = await res.json()
+  toast.success('Image uploaded')
+  return data.secure_url
+}
+
+// ---------- Service Card with provider info ----------
+function ServiceCard({ service, onEdit, onDelete, onRequest }: {
+  service: Service
+  onEdit: (s: Service) => void
+  onDelete: (s: Service) => void
+  onRequest: (s: Service) => void
+}) {
+  const { user } = useAuthStore()
+  const isOwner = user?.id === service.provider_id
+  const { data: provider } = useUserInfo(service.provider_id)
+
+  return (
+    <Card className="bg-white border border-gray-100 shadow-sm hover:shadow-md transition-shadow">
+      <CardHeader className="pb-2">
+        {provider && (
+          <div className="flex items-center gap-2 mb-3">
+            <Avatar className="h-8 w-8">
+              <AvatarImage src={provider.profile_image_url || undefined} />
+              <AvatarFallback>{provider.display_name?.[0] || '?'}</AvatarFallback>
+            </Avatar>
+            <div>
+              <p className="text-sm font-medium">{provider.display_name || 'Unknown'}</p>
+              {/* vouch count could be added if backend returned it */}
+            </div>
+          </div>
+        )}
+        {service.image_url && (
+          <div className="mb-3">
+            <a href={service.image_url} target="_blank" rel="noopener noreferrer">
+              <img src={service.image_url} className="rounded-lg w-full h-40 object-cover hover:opacity-90 transition-opacity" />
+            </a>
+          </div>
+        )}
+        <div className="flex justify-between items-start">
+          <CardTitle className="text-lg font-semibold">{service.title}</CardTitle>
+          <Badge variant={service.is_active ? 'default' : 'secondary'} className={service.is_active ? 'bg-black text-white' : 'bg-gray-200 text-gray-600'}>
+            {service.is_active ? 'Active' : 'Paused'}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="text-sm text-gray-600">
+        {service.description && <p className="line-clamp-2 mb-2">{service.description}</p>}
+        <div className="flex justify-between items-center">
+          <span className="font-semibold text-black">₦{parseFloat(service.price as string).toLocaleString()}</span>
+          <span className="text-gray-400 text-xs">{service.radius_km} km radius</span>
+        </div>
+      </CardContent>
+      <CardFooter className="pt-0 flex gap-2 justify-end">
+        {isOwner ? (
+          <>
+            <Button size="sm" variant="ghost" onClick={() => onEdit(service)} className="text-gray-600 hover:text-black">
+              <Edit className="w-4 h-4 mr-1" /> Edit
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => onDelete(service)} className="text-gray-600 hover:text-red-600">
+              <Trash2 className="w-4 h-4 mr-1" /> Delete
+            </Button>
+          </>
+        ) : (
+          <Button size="sm" variant="default" onClick={() => onRequest(service)} className="bg-black text-white hover:bg-gray-800">
+            <Send className="w-4 h-4 mr-1" /> Request
+          </Button>
+        )}
+      </CardFooter>
+    </Card>
+  )
+}
+
+// ---------- Main Page ----------
+export default function ServicesPage() {
+  const queryClient = useQueryClient()
+  useAuthStore() // we need user for checks, but we don't destructure to avoid unused warning
+  const { latitude, longitude, loading: locLoading, error: locError, refresh: refreshLoc } = useGeolocation()
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchLoading, setSearchLoading] = useState(false)
+  const [searchResults, setSearchResults] = useState<Service[] | null>(null)
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const [editService, setEditService] = useState<Service | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<Service | null>(null)
+  const [address, setAddress] = useState<string | null>(null)
+  const [catSearch, setCatSearch] = useState('')
+  const [catSearchResults, setCatSearchResults] = useState<Category[]>([])
+  const [activeTab, setActiveTab] = useState<'browse' | 'mine' | 'map'>('browse')
+  const [imageFile, setImageFile] = useState<File | null>(null)
+  const [imagePreview, setImagePreview] = useState<string | null>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  const [formData, setFormData] = useState({
+    category_id: '', title: '', description: '', price: '',
+    latitude: 0, longitude: 0, radius_km: '5.0',
+  })
+
+  // Fetch categories (not used directly in UI, but needed for seeding)
+  useQuery<Category[]>({
+    queryKey: ['categories'],
+    queryFn: async () => { const { data } = await api.get('/categories/'); return data },
+  })
+
+  // Fetch my services (for checking duplicates)
+  const { data: myServices, isLoading: myLoading } = useQuery<Service[]>({
+    queryKey: ['myServices'],
+    queryFn: async () => { const { data } = await api.get('/services/'); return data },
+  })
+
+  // Fetch nearby services (browse tab)
+  const { data: nearbyServices, isLoading: nearbyLoading } = useQuery<Service[]>({
+    queryKey: ['nearbyServices', latitude, longitude],
+    queryFn: async () => {
+      if (!latitude || !longitude) return []
+      const { data } = await api.get('/services/search/nearby', { params: { lat: latitude, lon: longitude, radius: 10 } })
+      return data
+    },
+    enabled: !!latitude && !!longitude,
+  })
+
+  // Reverse geocode
+  useEffect(() => {
+    if (latitude && longitude) {
+      fetch(`https://nominatim.openstreetmap.org/reverse?lat=${latitude}&lon=${longitude}&format=json`)
+        .then(res => res.json())
+        .then(data => data?.display_name ? setAddress(data.display_name) : null)
+        .catch(() => {})
+    }
+  }, [latitude, longitude])
+
+  // Update location on backend
+  useEffect(() => {
+    if (latitude && longitude) {
+      api.post('/users/me/location', { latitude, longitude }).catch(() => {})
+    }
+  }, [latitude, longitude])
+
+  // Search handlers
+  const handleTextSearch = async () => {
+    if (!searchQuery.trim()) { setSearchResults(null); return }
+    setSearchLoading(true)
+    try {
+      const { data } = await api.get('/services/search/text', { params: { q: searchQuery } })
+      setSearchResults(data)
+      setActiveTab('browse')
+    } catch { toast.error('Search failed') }
+    finally { setSearchLoading(false) }
+  }
+
+  const handleNearbySearch = async () => {
+    if (!latitude || !longitude) { toast.error('Location not available'); return }
+    setSearchLoading(true)
+    try {
+      const { data } = await api.get('/services/search/nearby', { params: { lat: latitude, lon: longitude, radius: 10 } })
+      setSearchResults(data)
+      setActiveTab('browse')
+    } catch { toast.error('Search failed') }
+    finally { setSearchLoading(false) }
+  }
+
+  const clearSearch = () => { setSearchResults(null); setSearchQuery('') }
+
+  // Mutations
+  const createMutation = useMutation({
+    mutationFn: async (data: ServiceCreate) => { const { data: res } = await api.post('/services/', data); return res },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['myServices'] })
+      queryClient.invalidateQueries({ queryKey: ['nearbyServices'] })
+      toast.success('Service created')
+      setDialogOpen(false)
+      resetForm()
+    },
+    onError: (err: any) => {
+      if (err.response?.status === 409) {
+        toast.error('You already have a service with this title')
+      } else {
+        toast.error(err.response?.data?.detail || 'Failed to create service')
+      }
+    },
+  })
+
+  const updateMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string, data: ServiceUpdate }) => { const { data: res } = await api.patch(`/services/${id}`, data); return res },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['myServices'] })
+      queryClient.invalidateQueries({ queryKey: ['nearbyServices'] })
+      toast.success('Service updated')
+      setDialogOpen(false)
+      resetForm()
+    },
+    onError: (err: any) => toast.error(err.response?.data?.detail || 'Failed to update service'),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => { await api.delete(`/services/${id}`) },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['myServices'] })
+      queryClient.invalidateQueries({ queryKey: ['nearbyServices'] })
+      toast.success('Service deleted')
+    },
+    onError: (err: any) => toast.error(err.response?.data?.detail || 'Failed to delete service'),
+  })
+
+  const createCategoryMutation = useMutation({
+    mutationFn: async (name: string) => { const { data } = await api.post('/categories/', { name }); return data as Category },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['categories'] })
+      setFormData(p => ({ ...p, category_id: data.id }))
+      setCatSearch(data.name)
+      setCatSearchResults([])
+      toast.success('Category created')
+    },
+    onError: (err: any) => toast.error(err.response?.data?.detail || 'Failed to create category'),
+  })
+
+  const resetForm = () => {
+    setFormData({ category_id: '', title: '', description: '', price: '', latitude: 0, longitude: 0, radius_km: '5.0' })
+    setEditService(null)
+    setImageFile(null)
+    setImagePreview(null)
+    setCatSearch('')
+    setCatSearchResults([])
+  }
+
+  const handleCreateOrUpdate = async () => {
+    if (!formData.title || !formData.price || !formData.category_id) { toast.error('Title, price, and category required'); return }
+    if (!latitude || !longitude) { toast.error('Location not available'); return }
+
+    // Duplicate check
+    if (!editService && myServices) {
+      const exists = myServices.some(s => s.title.toLowerCase() === formData.title.toLowerCase())
+      if (exists) {
+        toast.error('You already have a service with this title')
+        return
+      }
+    }
+
+    let imageUrl: string | undefined
+    if (imageFile) {
+      try { imageUrl = await uploadFile(imageFile) } catch { return }
+    }
+
+    const payload: ServiceCreate = {
+      title: formData.title,
+      description: formData.description,
+      price: formData.price,
+      category_id: formData.category_id,
+      latitude,
+      longitude,
+      radius_km: formData.radius_km || '5.0',
+      image_url: imageUrl,
+    }
+
+    if (editService) {
+      updateMutation.mutate({ id: editService.id, data: payload })
+    } else {
+      console.log('Service payload:', payload)
+      // createMutation.mutate(payload)
+      createMutation.mutate(payload)
+    }
+  }
+
+  const handleEdit = (service: Service) => {
+    setEditService(service)
+    setFormData({
+      category_id: service.category_id,
+      title: service.title,
+      description: service.description || '',
+      price: String(service.price),
+      latitude: service.latitude,
+      longitude: service.longitude,
+      radius_km: String(service.radius_km),
+    })
+    setCatSearch('') // clear category search
+    setDialogOpen(true)
+  }
+
+  const handleDelete = (service: Service) => setDeleteTarget(service)
+  // const handleRequest = (service: Service) => toast.success(`Request sent for "${service.title}"`)
+  const handleRequest = async (service: Service) => {
+    try {
+      const { data: _data } = await api.post(`/jobs/request-service/${service.id}`)
+
+      toast.success(`Request sent! View it in My Jobs.`)
+      // Optionally navigate to the activity page
+      // navigate('/dashboard/activity')
+    } catch (err: any) {
+      toast.error(err.response?.data?.detail || 'Failed to request service')
+    }
+  }
+  return (
+    <div className="space-y-8 animate-in fade-in duration-500">
+      {/* Header */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Services & Neighborhood</h1>
+          <p className="text-gray-500">{activeTab === 'browse' ? 'Discover services in your neighborhood' : activeTab === 'map' ? 'See activity around you' : 'Manage your offerings'}</p>
+        </div>
+        <div className="flex gap-2">
+          <Button variant={activeTab === 'browse' ? 'default' : 'outline'} onClick={() => setActiveTab('browse')} className={activeTab === 'browse' ? 'bg-black text-white' : 'border-gray-200'}>
+            <Search className="w-4 h-4 mr-2" /> Browse
+          </Button>
+          <Button variant={activeTab === 'map' ? 'default' : 'outline'} onClick={() => setActiveTab('map')} className={activeTab === 'map' ? 'bg-black text-white' : 'border-gray-200'}>
+            <MapPin className="w-4 h-4 mr-2" /> Map
+          </Button>
+          <Button variant={activeTab === 'mine' ? 'default' : 'outline'} onClick={() => setActiveTab('mine')} className={activeTab === 'mine' ? 'bg-black text-white' : 'border-gray-200'}>
+            My Services
+          </Button>
+          <Button variant="outline" onClick={handleNearbySearch} disabled={locLoading} className="border-gray-200" title="Refresh nearby search">
+            <MapPin className="w-4 h-4 mr-2" /> Nearby
+          </Button>
+          <Dialog open={dialogOpen} onOpenChange={(open) => { setDialogOpen(open); if (!open) resetForm() }}>
+            <DialogTrigger asChild>
+              <Button className="bg-black text-white hover:bg-gray-800"><Plus className="w-4 h-4 mr-2" /> New</Button>
+            </DialogTrigger>
+            <DialogContent className="sm:max-w-lg bg-white text-black max-h-[90vh] overflow-y-auto">
+              <DialogHeader><DialogTitle>{editService ? 'Edit Service' : 'Create Service'}</DialogTitle></DialogHeader>
+              <div className="space-y-4 py-4">
+                <Input placeholder="Title *" value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})} />
+                <Textarea placeholder="Description" value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})} />
+                <div className="grid grid-cols-2 gap-4">
+                  <Input type="number" placeholder="Price (₦) *" value={formData.price} onChange={e => setFormData({...formData, price: e.target.value})} />
+                  <Input type="number" placeholder="Radius (km)" value={formData.radius_km} onChange={e => setFormData({...formData, radius_km: e.target.value})} />
+                </div>
+
+                {/* Category search & create */}
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Category *</label>
+                  {!formData.category_id ? (
+                    <div className="relative">
+                      <Input placeholder="Search or type a new category..." value={catSearch}
+                        onChange={(e) => {
+                          const val = e.target.value
+                          setCatSearch(val)
+                          if (val.trim()) {
+                            api.get('/categories/', { params: { q: val } }).then(({ data }) => setCatSearchResults(data as Category[])).catch(() => setCatSearchResults([]))
+                          } else {
+                            setCatSearchResults([])
+                          }
+                        }}
+                      />
+                      {catSearch && catSearchResults.length > 0 && (
+                        <div className="absolute z-20 w-full bg-white border border-gray-200 rounded-lg mt-1 max-h-40 overflow-y-auto shadow-lg">
+                          {catSearchResults.map(cat => (
+                            <div key={cat.id} className="px-4 py-2 hover:bg-gray-100 cursor-pointer text-sm" onClick={() => {
+                              setFormData({...formData, category_id: cat.id})
+                              setCatSearch(cat.name)
+                              setCatSearchResults([])
+                            }}>
+                              {cat.name}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {catSearch && catSearchResults.length === 0 && (
+                        <div className="absolute z-20 w-full bg-white border border-gray-200 rounded-lg mt-1 p-2 shadow-lg">
+                          <p className="text-sm text-gray-500 mb-2">No matches. Create "{catSearch}"</p>
+                          <Button size="sm" onClick={() => createCategoryMutation.mutate(catSearch.trim())} disabled={!catSearch.trim()} className="w-full bg-black text-white">
+                            <Plus className="w-4 h-4 mr-1" /> Create "{catSearch}"
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm bg-gray-100 px-3 py-1 rounded-full">{catSearch}</span>
+                      <Button size="sm" variant="ghost" onClick={() => { setFormData({...formData, category_id: ''}); setCatSearch('') }}>
+                        <X className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Image upload */}
+                <div>
+                  <input type="file" accept="image/*" ref={fileRef} className="hidden"
+                    onChange={e => {
+                      const file = e.target.files?.[0]
+                      if (file) {
+                        setImageFile(file)
+                        setImagePreview(URL.createObjectURL(file))
+                      }
+                    }}
+                  />
+                  {imagePreview ? (
+                    <div className="relative w-32 h-32">
+                      <img src={imagePreview} className="rounded-lg object-cover w-full h-full" />
+                      <X className="absolute top-1 right-1 h-4 w-4 bg-white rounded-full cursor-pointer" onClick={() => { setImageFile(null); setImagePreview(null) }} />
+                    </div>
+                  ) : (
+                    <Button variant="outline" onClick={() => fileRef.current?.click()} className="w-full">
+                      <ImagePlus className="w-4 h-4 mr-2" /> Add Photo (optional)
+                    </Button>
+                  )}
+                </div>
+
+                {/* Location */}
+                <div className="text-sm text-gray-500">
+                  {locLoading ? 'Getting location...' : locError ? (
+                    <span className="text-red-500 flex items-center gap-1"><X className="w-3 h-3 inline" />{locError} <Button size="sm" variant="ghost" onClick={refreshLoc}><RefreshCw className="w-3 h-3" /></Button></span>
+                  ) : address ? (
+                    <span className="flex items-center gap-1"><MapPin className="w-4 h-4 inline text-gray-500" /> {address}</span>
+                  ) : `Lat: ${latitude?.toFixed(4)}, Lon: ${longitude?.toFixed(4)}`}
+                </div>
+
+                <div className="flex justify-end gap-2 pt-4">
+                  <Button variant="outline" onClick={() => setDialogOpen(false)} className="border-gray-200">Cancel</Button>
+                  <Button onClick={handleCreateOrUpdate} className="bg-black text-white hover:bg-gray-800" disabled={locLoading}>
+                    {editService ? 'Save Changes' : 'Create'}
+                  </Button>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
+        </div>
+      </div>
+
+      {/* Search bar (only for browse) */}
+      {activeTab === 'browse' && (
+        <div className="flex gap-2 items-center">
+          <div className="relative flex-1 max-w-md">
+            <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
+            <Input placeholder="Search services..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleTextSearch()} className="pl-10 bg-white border-gray-200" />
+          </div>
+          <Button variant="outline" onClick={handleTextSearch} disabled={searchLoading} className="border-gray-200">{searchLoading ? 'Searching...' : 'Search'}</Button>
+          {searchResults && <Button variant="ghost" size="sm" onClick={clearSearch} className="text-gray-500"><X className="w-4 h-4 mr-1" /> Clear</Button>}
+        </div>
+      )}
+
+      {/* Content based on active tab */}
+      <AnimatePresence mode="wait">
+        {activeTab === 'map' ? (
+          <motion.div key="map" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            {latitude && longitude ? (
+              <NeighborhoodMap latitude={latitude} longitude={longitude} />
+            ) : (
+              <div className="text-center py-12 border border-dashed border-gray-200 rounded-xl bg-gray-50">
+                <MapPin className="w-10 h-10 text-gray-400 mx-auto mb-3" />
+                <p className="text-gray-500">Enable location to view the neighborhood map.</p>
+              </div>
+            )}
+          </motion.div>
+        ) : searchResults ? (
+          <motion.div key="search" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            <h2 className="text-lg font-semibold mb-4">Search Results ({searchResults.length})</h2>
+            <div className="grid gap-4 md:grid-cols-2">
+              {searchResults.map(s => <ServiceCard key={s.id} service={s} onEdit={handleEdit} onDelete={handleDelete} onRequest={handleRequest} />)}
+            </div>
+          </motion.div>
+        ) : activeTab === 'browse' ? (
+          <motion.div key="browse" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            <h2 className="text-lg font-semibold mb-4">Browse Services</h2>
+            {nearbyLoading ? (
+              <div className="grid gap-4 md:grid-cols-2">
+                {[1,2,3,4].map(i => <Card key={i} className="bg-gray-50"><CardHeader><Skeleton className="h-5 w-3/4" /></CardHeader><CardContent><Skeleton className="h-4 w-full mb-2" /><Skeleton className="h-4 w-1/2" /></CardContent></Card>)}
+              </div>
+            ) : nearbyServices?.length ? (
+              <div className="grid gap-4 md:grid-cols-2">
+                {nearbyServices.map(s => <ServiceCard key={s.id} service={s} onEdit={handleEdit} onDelete={handleDelete} onRequest={handleRequest} />)}
+              </div>
+            ) : (
+              <div className="text-center py-12 border border-dashed border-gray-200 rounded-xl bg-gray-50">
+                <MapPin className="w-10 h-10 text-gray-400 mx-auto mb-3" />
+                <p className="text-gray-500">No services found nearby. Try a wider search or create your own.</p>
+              </div>
+            )}
+          </motion.div>
+        ) : (
+          <motion.div key="mine" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            <h2 className="text-lg font-semibold mb-4">My Services</h2>
+            {myLoading ? (
+              <div className="grid gap-4 md:grid-cols-2">
+                {[1,2].map(i => <Card key={i} className="bg-gray-50"><CardHeader><Skeleton className="h-5 w-3/4" /></CardHeader><CardContent><Skeleton className="h-4 w-full mb-2" /><Skeleton className="h-4 w-1/2" /></CardContent></Card>)}
+              </div>
+            ) : myServices?.length ? (
+              <div className="grid gap-4 md:grid-cols-2">
+                {myServices.map(s => <ServiceCard key={s.id} service={s} onEdit={handleEdit} onDelete={handleDelete} onRequest={handleRequest} />)}
+              </div>
+            ) : (
+              <div className="text-center py-12 border border-dashed border-gray-200 rounded-xl bg-gray-50">
+                <Plus className="w-10 h-10 text-gray-400 mx-auto mb-3" />
+                <p className="text-gray-500">You haven't created any services yet.</p>
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Delete confirmation */}
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}
+        title="Delete service?"
+        description={`Are you sure you want to delete "${deleteTarget?.title}"?`}
+        onConfirm={() => { if (deleteTarget) { deleteMutation.mutate(deleteTarget.id); setDeleteTarget(null) } }}
+      />
+    </div>
+  )
+}

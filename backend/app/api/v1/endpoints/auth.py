@@ -1,9 +1,9 @@
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-from fastapi import APIRouter, Depends, HTTPException, status, Response
+from fastapi import APIRouter, Depends, HTTPException, status, Response, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from ....core.dependencies import get_db, get_current_user
-from ....core.security import create_access_token, verify_password, decode_access_token
+from ....core.security import create_access_token, verify_password, decode_access_token, create_refresh_token, REFRESH_TOKEN_EXPIRE_DAYS
 from ....core.config import settings
 from ....crud.user import (
     get_user_by_email,
@@ -45,6 +45,16 @@ async def login(login_in: UserLogin, response: Response, db: AsyncSession = Depe
         max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )
 
+    refresh_token = create_refresh_token(data={"sub": str(user.id)})
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        secure=settings.SECURE_COOKIES,           # same as access token
+        samesite="strict",
+        max_age=REFRESH_TOKEN_EXPIRE_DAYS * 86400,
+    )
+
     return {"access_token": token, "token_type": "bearer"}
 
 
@@ -66,15 +76,18 @@ async def google_auth(auth_data: UserGoogleAuth, response: Response, db: AsyncSe
     google_id = idinfo["sub"]
     email = idinfo.get("email")
     name = idinfo.get("name", email)
+    picture = idinfo.get("picture")
 
     user = await get_user_by_google_id(db, google_id)
     if not user:
         user = await get_user_by_email(db, email)
         if user:
             user.google_id = google_id
+            if picture and not user.profile_image_url:
+                user.profile_image_url = picture
             await db.commit()
         else:
-            user = await create_user_from_google(db, email, google_id, name)
+            user = await create_user_from_google(db, email, google_id, name, picture)
 
     token = create_access_token(data={"sub": str(user.id)})
 
@@ -85,6 +98,16 @@ async def google_auth(auth_data: UserGoogleAuth, response: Response, db: AsyncSe
         secure=settings.SECURE_COOKIES,   # True in production with HTTPS
         samesite="strict",
         max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    )
+
+    refresh_token = create_refresh_token(data={"sub": str(user.id)})
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        secure=settings.SECURE_COOKIES,           # same as access token
+        samesite="strict",
+        max_age=REFRESH_TOKEN_EXPIRE_DAYS * 86400,
     )
 
     return {"access_token": token, "token_type": "bearer"}
@@ -132,6 +155,7 @@ async def link_google(
     google_id = idinfo["sub"]
     google_email = idinfo.get("email")
     google_name = idinfo.get("name")
+    google_picture = idinfo.get("picture")
 
     # Check if this Google account is already linked to another user
     existing = await get_user_by_google_id(db, google_id)
@@ -144,6 +168,9 @@ async def link_google(
     # Update display name from Google (always safe)
     if google_name:
         current_user.display_name = google_name
+        
+    if google_picture and not current_user.profile_image_url:
+        current_user.profile_image_url = google_picture
 
     # Update email only if it's different and not already taken by another user
     if google_email and google_email != current_user.email:
@@ -154,3 +181,31 @@ async def link_google(
 
     await db.commit()
     return {"message": "Google account linked"}
+
+
+@router.post("/refresh")
+async def refresh_access_token(request: Request, response: Response):
+    refresh_token = request.cookies.get("refresh_token")
+    if not refresh_token:
+        raise HTTPException(status_code=401, detail="No refresh token")
+    payload = decode_access_token(refresh_token)
+    if payload is None or payload.get("type") != "refresh":
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+    user_id = payload.get("sub")
+    new_access = create_access_token(data={"sub": user_id})
+    response.set_cookie(
+        key="access_token",
+        value=new_access,
+        httponly=True,
+        secure=False,
+        samesite="strict",
+        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    )
+    return {"status": "ok"}
+    
+@router.post("/logout")
+async def logout(response: Response):
+    response.delete_cookie("access_token")
+    response.delete_cookie("refresh_token")   # <— add this
+    return {"message": "Logged out"}
+

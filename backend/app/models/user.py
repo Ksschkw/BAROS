@@ -40,6 +40,9 @@ class User(Base):
     disputes_as_client = relationship("Dispute", back_populates="client", foreign_keys="[Dispute.client_id]")
     disputes_as_provider = relationship("Dispute", back_populates="provider", foreign_keys="[Dispute.provider_id]")
 
+    civic_gateway_token = Column(String(255), nullable=True)
+    is_identity_verified = Column(Boolean, default=False)
+
     @property
     def wallet_private_key(self) -> bytes | None:
         """Decrypt and return the private key bytes."""

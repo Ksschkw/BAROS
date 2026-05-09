@@ -33,9 +33,9 @@ async def create_service_route(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    async with db.begin():       # all-or-nothing transaction
-        service = await create_service(db, current_user.id, service_in)
-    await db.refresh(service)   # now safe to refresh after commit
+    service = await create_service(db, current_user.id, service_in)
+    await db.commit()
+    await db.refresh(service)
     return service
 
 
@@ -86,10 +86,13 @@ async def update_service_route(
 ):
     service = await get_service_by_id(db, service_id)
     if not service:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Service not found")
+        raise HTTPException(status_code=404, detail="Service not found")
     if service.provider_id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not your service")
+        raise HTTPException(status_code=403, detail="Not your service")
+    # Apply updates (CRUD function does flush only)
     service = await update_service(db, service, service_in)
+    await db.commit()
+    await db.refresh(service)
     return service
 
 
@@ -104,5 +107,6 @@ async def delete_service_route(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Service not found")
     if service.provider_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not your service")
-    await delete_service(db, service)
+    await delete_service(db, service)       # CRUD function does flush
+    await db.commit()
     return None
