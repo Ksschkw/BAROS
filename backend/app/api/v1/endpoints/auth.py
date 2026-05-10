@@ -41,7 +41,7 @@ async def login(login_in: UserLogin, response: Response, db: AsyncSession = Depe
         value=token,
         httponly=True,
         secure=settings.SECURE_COOKIES,   # I will set to True in production with HTTPS
-        samesite="strict",
+        samesite="none",
         max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )
 
@@ -51,7 +51,7 @@ async def login(login_in: UserLogin, response: Response, db: AsyncSession = Depe
         value=refresh_token,
         httponly=True,
         secure=settings.SECURE_COOKIES,           # same as access token
-        samesite="strict",
+        samesite="none",
         max_age=REFRESH_TOKEN_EXPIRE_DAYS * 86400,
     )
 
@@ -96,7 +96,7 @@ async def google_auth(auth_data: UserGoogleAuth, response: Response, db: AsyncSe
         value=token,
         httponly=True,
         secure=settings.SECURE_COOKIES,   # True in production with HTTPS
-        samesite="strict",
+        samesite="none",
         max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )
 
@@ -106,7 +106,7 @@ async def google_auth(auth_data: UserGoogleAuth, response: Response, db: AsyncSe
         value=refresh_token,
         httponly=True,
         secure=settings.SECURE_COOKIES,           # same as access token
-        samesite="strict",
+        samesite="none",
         max_age=REFRESH_TOKEN_EXPIRE_DAYS * 86400,
     )
 
@@ -197,8 +197,8 @@ async def refresh_access_token(request: Request, response: Response):
         key="access_token",
         value=new_access,
         httponly=True,
-        secure=False,
-        samesite="strict",
+        secure=settings.SECURE_COOKIES,
+        samesite="none",
         max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )
     return {"status": "ok"}
