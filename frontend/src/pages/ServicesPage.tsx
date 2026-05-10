@@ -14,7 +14,7 @@ import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar'
 import { useGeolocation } from '@/hooks/useGeolocation'
 import { useAuthStore } from '@/store/authStore'
 import {
-  MapPin, Search, Plus, Edit, Trash2, RefreshCw, X, Send, ImagePlus, Shield
+  MapPin, Search, Plus, Edit, Trash2, RefreshCw, X, Send, ImagePlus
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { NeighborhoodMap } from '@/components/NeighborhoodMap'

@@ -424,7 +424,7 @@ export default function ActivityPage() {
                 <p className="font-bold text-yellow-800">Scope Amendment Proposed</p>
                 <p><strong>Reason:</strong> {amend.reason}</p>
                 <p><strong>New Price:</strong> ₦{parseFloat(amend.new_total_price as string).toLocaleString()}</p>
-                {amend.image_url && <img src={amend.image_url} className="rounded-lg w-full max-h-32 object-cover mt-2" />}
+                {(amend as any).image_url && <img src={(amend as any).image_url} className="rounded-lg w-full max-h-32 object-cover mt-2" />}
                 {contractRoomJob?.client_id === user?.id && (
                   <div className="flex gap-2 pt-2">
                     <Button
