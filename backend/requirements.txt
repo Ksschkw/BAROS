@@ -24,3 +24,4 @@ google-auth
 email-validator
 vercel
 pydantic[email]
+requests
