@@ -11,6 +11,7 @@ import ServicesPage from '@/pages/ServicesPage'
 import ActivityPage from '@/pages/ActivityPage'
 import MessagesPage from '@/pages/MessagesPage'
 import ProfilePage from '@/pages/ProfilePage'
+import { CookieConsentBanner } from '@/components/CookieConsent'
 
 const queryClient = new QueryClient()
 
@@ -34,6 +35,7 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <ToastProvider />
+        <CookieConsentBanner />
         <Routes>
           <Route path="/" element={<LandingPage />} />
           <Route

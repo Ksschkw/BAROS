@@ -2,15 +2,37 @@ import axios from 'axios'
 import { useAuthStore } from '@/store/authStore'
 import { toast } from 'sonner'
 
+// ── Token helpers ────────────────────────────────────────────────────────────
+// We persist the access_token in localStorage as a fallback for cross-site
+// environments (Vercel + Render) where Chrome blocks third-party cookies.
+// The backend already accepts both HttpOnly cookie AND Authorization header.
+const TOKEN_KEY = 'baros_access_token'
+
+export const saveToken = (token: string) => localStorage.setItem(TOKEN_KEY, token)
+export const clearToken = () => localStorage.removeItem(TOKEN_KEY)
+export const getToken = () => localStorage.getItem(TOKEN_KEY)
+
+// ── Axios instance ───────────────────────────────────────────────────────────
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL 
     ? `${import.meta.env.VITE_API_URL}/api/v1` 
     : '/api/v1',
   headers: { 'Content-Type': 'application/json' },
-  withCredentials: true,
-  timeout: 10000,
+  withCredentials: true,  // still send cookies when they work
+  timeout: 15000,
 })
 
+// ── Request interceptor: inject Bearer token from localStorage ───────────────
+// This is the fallback that makes auth work even when cross-site cookies are blocked.
+api.interceptors.request.use((config) => {
+  const token = getToken()
+  if (token && !config.headers['Authorization']) {
+    config.headers['Authorization'] = `Bearer ${token}`
+  }
+  return config
+})
+
+// ── Response interceptor: handle 401 / token refresh ─────────────────────────
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
@@ -18,9 +40,9 @@ api.interceptors.response.use(
 
     // Never retry these endpoints
     if (
-      originalRequest.url === '/auth/refresh' ||
-      originalRequest.url === '/auth/me' ||
-      originalRequest.url === '/auth/logout'
+      originalRequest.url?.includes('/auth/refresh') ||
+      originalRequest.url?.includes('/auth/me') ||
+      originalRequest.url?.includes('/auth/logout')
     ) {
       return Promise.reject(error)
     }
@@ -30,11 +52,17 @@ api.interceptors.response.use(
       originalRequest._retry = true
 
       try {
-        await api.post('/auth/refresh')
-        // Refresh succeeded – retry original
+        // Try cookie-based refresh first
+        const refreshRes = await api.post('/auth/refresh')
+        // If the backend returns a new access_token in body, save it
+        if (refreshRes.data?.access_token) {
+          saveToken(refreshRes.data.access_token)
+          originalRequest.headers['Authorization'] = `Bearer ${refreshRes.data.access_token}`
+        }
         return api(originalRequest)
       } catch {
-        // Refresh failed – only redirect if not already on landing page
+        // Refresh failed – log out and redirect
+        clearToken()
         useAuthStore.getState().logout()
         if (window.location.pathname !== '/') {
           window.location.href = '/'
@@ -43,7 +71,7 @@ api.interceptors.response.use(
       }
     }
 
-    // Handle generic 400 errors (like Solana/USDC errors) with sonner toast
+    // Handle generic 400 errors (Solana/USDC etc.) with a toast
     if (error.response?.status === 400 && error.response?.data?.detail) {
       toast.error(error.response.data.detail)
     }

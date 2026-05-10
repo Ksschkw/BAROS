@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import api from '@/lib/api'
+import api, { saveToken, clearToken } from '@/lib/api'
 
 interface User {
   id: string
@@ -36,13 +36,18 @@ export const useAuthStore = create<AuthState>((set) => ({
       const res = await api.get('/auth/me')
       set({ user: res.data, isLoading: false })
     } catch {
-      // No backend or not logged in – still set loading to false
       set({ user: null, isLoading: false })
     }
   },
 
   login: async (email, password) => {
-    await api.post('/auth/login', { email, password })
+    // Backend returns { access_token, token_type } AND sets HttpOnly cookies.
+    // We also save to localStorage so the Bearer header fallback works in
+    // cross-site deployments (Vercel + Render) where Chrome blocks cookies.
+    const res = await api.post('/auth/login', { email, password })
+    if (res.data?.access_token) {
+      saveToken(res.data.access_token)
+    }
     const userRes = await api.get('/auth/me')
     set({ user: userRes.data })
   },
@@ -50,14 +55,21 @@ export const useAuthStore = create<AuthState>((set) => ({
   register: async (data) => {
     await api.post('/auth/register', data)
     if (data.password) {
-      await api.post('/auth/login', { email: data.email, password: data.password })
+      const res = await api.post('/auth/login', { email: data.email, password: data.password })
+      if (res.data?.access_token) {
+        saveToken(res.data.access_token)
+      }
     }
     const userRes = await api.get('/auth/me')
     set({ user: userRes.data })
   },
 
   googleAuth: async (token) => {
-    await api.post('/auth/google', { token })
+    // Backend returns { access_token, token_type } AND sets HttpOnly cookies.
+    const res = await api.post('/auth/google', { token })
+    if (res.data?.access_token) {
+      saveToken(res.data.access_token)
+    }
     const userRes = await api.get('/auth/me')
     set({ user: userRes.data })
   },
@@ -66,6 +78,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     try {
       await api.post('/auth/logout')
     } catch {}
+    clearToken()
     set({ user: null })
   },
 }))

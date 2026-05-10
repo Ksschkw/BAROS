@@ -201,7 +201,9 @@ async def refresh_access_token(request: Request, response: Response):
         samesite="None",
         max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )
-    return {"status": "ok"}
+    # Also return the token in the body so clients that can't use cookies
+    # (cross-site / Chrome storage blocked) can save it to localStorage.
+    return {"status": "ok", "access_token": new_access, "token_type": "bearer"}
     
 @router.post("/logout")
 async def logout(response: Response):
