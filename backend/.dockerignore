@@ -1,0 +1,32 @@
+# ── Python cache & compiled files ────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# ── Virtual environments ─────────────────────────────────────────────────────
+venv/
+env/
+.venv/
+ENV/
+
+# ── Environment variables (never commit!) ────────────────────────────────────
+.env
+*.env
+
+# ── Test & coverage ──────────────────────────────────────────────────────────
+.pytest_cache/
+htmlcov/
+.coverage
+
+# ── Alembic ──────────────────────────────────────────────────────────────────
+# Keep the versions/ folder but ignore migration logs
+*.pyc
+
+# ── IDE & OS files ───────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── SQLite dev databases ─────────────────────────────────────────────────────
+*.db
+*.sqlite3

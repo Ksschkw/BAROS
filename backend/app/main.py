@@ -29,14 +29,21 @@ async def on_startup():
 #     allow_headers=["*"],
 # )
 
+import os
+
+ALLOWED_ORIGINS = [
+    "http://localhost:5173",   # Vite dev server
+    "http://localhost:5500",   # test HTML
+    "http://127.0.0.1:5500",
+    "http://localhost",
+]
+# In production, set FRONTEND_URL env var to your Render URL, e.g. https://baros.onrender.com
+if os.getenv("FRONTEND_URL"):
+    ALLOWED_ORIGINS.append(os.getenv("FRONTEND_URL"))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",   # React dev server
-        "http://localhost:5500",   # test HTML
-        "http://127.0.0.1:5500",  # test HTML (IP variant)
-        "http://localhost",
-    ],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
