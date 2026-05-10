@@ -21,3 +21,4 @@ geopy
 shapely
 base58
 google-auth
+vercel
