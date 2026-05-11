@@ -108,6 +108,7 @@ async def _get_program() -> Program:
         # timeout=60 so Helius cold-starts don't time out mid-request
         _client = AsyncClient(settings.SOLANA_RPC_URL, timeout=60)
         idl_path = os.path.join(os.path.dirname(__file__), "baros_program.json")
+        idl_path = r"backend\app\services\baros_program.json"
         with open(idl_path, "r") as f:
             raw = json.load(f)
         if "metadata" not in raw:
