@@ -107,20 +107,32 @@ async def _get_program() -> Program:
     if _program is None:
         # timeout=60 so Helius cold-starts don't time out mid-request
         _client = AsyncClient(settings.SOLANA_RPC_URL, timeout=60)
-        idl_path = os.path.join(os.path.dirname(__file__), "baros_program.json")
-        idl_path = r"app/services/baros_program.json"
-        with open(idl_path, "r") as f:
-            raw = json.load(f)
-        if "metadata" not in raw:
-            raw["metadata"] = {"address": settings.BAROS_PROGRAM_ID}
-        idl = Idl.from_json(json.dumps(raw))
+        idl_dict = json.loads(r"""{"version":"0.1.0","name":"baros_escrow","instructions":[{"name":"initEscrow","accounts":[{"name":"client","isMut":true,"isSigner":true},{"name":"provider","isMut":false,"isSigner":false},{"name":"mint","isMut":false,"isSigner":false},{"name":"clientAta","isMut":true,"isSigner":false},{"name":"vaultAta","isMut":true,"isSigner":false},{"name":"escrow","isMut":true,"isSigner":false},{"name":"tokenProgram","isMut":false,"isSigner":false},{"name":"systemProgram","isMut":false,"isSigner":false},{"name":"rent","isMut":false,"isSigner":false}],"args":[{"name":"jobId","type":"u64"},{"name":"amount","type":"u64"}]},{"name":"releaseEscrow","accounts":[{"name":"client","isMut":true,"isSigner":true},{"name":"providerAta","isMut":true,"isSigner":false},{"name":"vaultAta","isMut":true,"isSigner":false},{"name":"escrow","isMut":true,"isSigner":false},{"name":"tokenProgram","isMut":false,"isSigner":false}],"args":[]},{"name":"cancelEscrow","accounts":[{"name":"client","isMut":true,"isSigner":true},{"name":"clientAta","isMut":true,"isSigner":false},{"name":"vaultAta","isMut":true,"isSigner":false},{"name":"escrow","isMut":true,"isSigner":false},{"name":"tokenProgram","isMut":false,"isSigner":false}],"args":[]}],"accounts":[{"name":"Escrow","type":{"kind":"struct","fields":[{"name":"client","type":"publicKey"},{"name":"provider","type":"publicKey"},{"name":"jobId","type":"u64"},{"name":"amount","type":"u64"},{"name":"bump","type":"u8"}]}}],"errors":[{"code":6000,"name":"UnauthorizedClient","msg":"Unauthorized: You are not the client."}]}""")
+        # idl_path = os.path.join(os.path.dirname(__file__), "baros_program.json")
+        # idl_path = r"app/services/baros_program.json"
+        # with open(idl_path, "r") as f:
+        #     raw = json.load(f)
+        # if "metadata" not in raw:
+        #     raw["metadata"] = {"address": settings.BAROS_PROGRAM_ID}
+        # idl = Idl.from_json(json.dumps(raw))
+        # provider = Provider(
+        #     _client,
+        #     Wallet(_get_payer()),
+        #     TxOpts(skip_preflight=False, preflight_commitment=Confirmed),
+        # )
+        # _program = Program(idl, Pubkey.from_string(settings.BAROS_PROGRAM_ID), provider)
+        # logger.info(f"[solana_client] Program loaded. RPC={settings.SOLANA_RPC_URL}")
+        if "metadata" not in idl_dict:
+            idl_dict["metadata"] = {"address": settings.BAROS_PROGRAM_ID}
+
+        idl = Idl.from_json(json.dumps(idl_dict))
         provider = Provider(
             _client,
             Wallet(_get_payer()),
             TxOpts(skip_preflight=False, preflight_commitment=Confirmed),
         )
         _program = Program(idl, Pubkey.from_string(settings.BAROS_PROGRAM_ID), provider)
-        logger.info(f"[solana_client] Program loaded. RPC={settings.SOLANA_RPC_URL}")
+        logger.info(f"[solana_client] Program loaded (embedded IDL). RPC={settings.SOLANA_RPC_URL}")
     return _program
 
 
