@@ -102,11 +102,3 @@ Users can post jobs with images, showcase service portfolios, and exchange photo
 Frictionless onboarding using Google OAuth, which automatically pulls and syncs the user's Google profile picture to their BAROS account.
 
 ---
-
-## 🛳 Deployment Readiness
-
-To deploy this stack to production:
-1. **Database**: Provision a PostgreSQL database with the PostGIS extension enabled (e.g., Neon or Northflank DB). Run migrations using the generated async engine script.
-2. **Backend (Northflank)**: Connect your GitHub repo, select the `backend` folder as the root, and use the `Dockerfile` or Python runtime. Ensure all `.env` secrets are mapped in the Northflank Secret Group.
-3. **Frontend (Render)**: Connect the `frontend` folder, use `npm run build` as the build command, and set the publish directory to `dist`. Add the production `VITE_API_URL` to Render's environment variables.
-4. **Solana**: Ensure the server wallet (if funding tx fees) has sufficient SOL on the Devnet.
