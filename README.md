@@ -6,6 +6,7 @@ BAROS is a hyper-local services marketplace with a cryptographically secured tru
 
 All blockchain interactions are hidden from the user, providing a Web2-like seamless experience (via mobile or PWA) while maintaining Web3 guarantees.
 
+> Demo : https://drive.google.com/file/d/142SPSW5hQhXhXTih6y6WjjrJDyXC0_xb/view
 ---
 
 ## 🏗 Architecture
